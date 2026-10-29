@@ -1,0 +1,145 @@
+{
+  "name": "Scholership bot Error Handler",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "e7673dac-495c-45b4-87ca-60218289c2e6",
+      "name": "01 - Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -336,
+        -144
+      ],
+      "notesInFlow": true,
+      "notes": "ماذا تحتوي: نقطة بداية خاصة بلا إعدادات.\nالفائدة: تبدأ تلقائياً عندما يفشل أي workflow يختار هذا الـ workflow كـ Error Workflow، فتصل كل أخطاء المشروع إلى مكان واحد.\nالتفعيل: لا شيء داخل العقدة. يكفي Publish للـ workflow، ثم ربطه من Settings في كل workflow آخر."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f3e1dc88-9d8d-412c-9e7e-7db23174cca1",
+              "name": "admin_chat_id",
+              "value": "YOUR_ADMIN_CHAT_ID",
+              "type": "string"
+            },
+            {
+              "id": "9ef53afc-c6ef-4f00-9a23-dcb874a4b04f",
+              "name": "timezone",
+              "value": "Asia/Gaza",
+              "type": "string"
+            },
+            {
+              "id": "4a68fc26-30c0-452b-9236-b73e39753f5d",
+              "name": "throttle_minutes",
+              "value": 15,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "3a8e6f6a-2e77-498f-a6a4-672329aaa740",
+      "name": "02 - Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -80,
+        -144
+      ],
+      "notesInFlow": true,
+      "notes": "ماذا تحتوي: ثلاثة حقول: admin_chat_id (رقم محادثتك)، timezone (Asia/Gaza)، throttle_minutes (15).\nالفائدة: مكان واحد لإعدادات المعالج.\nالتفعيل: استبدل YOUR_ADMIN_CHAT_ID برقمك (من @userinfobot على Telegram)."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Builds a short HTML alert for the admin and throttles repeated alerts.\nconst item = $input.first().json;\nconst execution = item.execution || {};\nconst trigger = item.trigger || {};\nconst workflow = item.workflow || {};\n// Normal failures arrive under \"execution\"; failures of a trigger (no execution id) arrive under \"trigger\".\nconst error = execution.error || trigger.error || {};\nconst failedNode = execution.lastNodeExecuted || error.node?.name || (item.trigger ? 'Trigger' : 'unknown');\n\nif (!/^-?\\d+$/.test(String(item.admin_chat_id || ''))) {\n  throw new Error('admin_chat_id غير مضبوط: ضع رقم محادثتك في عقدة 02 - Config');\n}\n\nconst esc = (v) => String(v ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;');\nconst cut = (v, n) => {\n  const s = String(v ?? '');\n  return s.length > n ? s.slice(0, n - 1) + '…' : s;\n};\n\n// Throttle: one alert per workflow + node every N minutes (static data persists in production runs).\nconst throttleMs = (Number(item.throttle_minutes) || 15) * 60 * 1000;\nconst key = `${workflow.id || 'unknown'}|${failedNode}`;\nconst store = $getWorkflowStaticData('global');\nstore.alerts = store.alerts || {};\nconst now = Date.now();\nconst prev = store.alerts[key] || { last: 0, suppressed: 0 };\n\n// Remove keys not seen for 7 days so static data does not grow forever.\nfor (const k of Object.keys(store.alerts)) {\n  if (now - store.alerts[k].last > 7 * 24 * 3600 * 1000) delete store.alerts[k];\n}\n\nif (prev.last && now - prev.last < throttleMs) {\n  store.alerts[key] = { last: prev.last, suppressed: (prev.suppressed || 0) + 1 };\n  return [];\n}\nstore.alerts[key] = { last: now, suppressed: 0 };\n\nconst message = error.message || error.description || '';\nconst lines = [\n  '⚠️ <b>خطأ في n8n</b>',\n  `<b>Workflow:</b> ${esc(workflow.name)}`,\n  `<b>العقدة:</b> ${esc(failedNode)}`,\n  `<b>الخطأ:</b> ${esc(cut(message, 300))}`,\n];\nif (prev.suppressed > 0) lines.push(`🔁 تكرر ${prev.suppressed} مرة منذ آخر تنبيه`);\nif (execution.url) lines.push(`<a href=\"${esc(execution.url)}\">فتح التنفيذ #${esc(execution.id)}</a>`);\n\nconst tz = item.timezone || 'Asia/Gaza';\nreturn [{\n  json: {\n    chat_id: String(item.admin_chat_id),\n    text: lines.join('\\n'),\n    log: {\n      timestamp: DateTime.now().setZone(tz).toISO(),\n      workflow: cut(workflow.name, 100),\n      level: 'error',\n      message: cut(`${failedNode}: ${message}`, 500),\n      ref: String(execution.id ?? ''),\n    },\n  },\n}];\n"
+      },
+      "id": "bfa661d9-b640-4870-840d-8c7947f4cf87",
+      "name": "03 - Build Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        -144
+      ],
+      "notesInFlow": true,
+      "notes": "ماذا تحتوي: كود يقرأ بيانات الخطأ (خطأ تنفيذ عادي أو خطأ Trigger)، ويتحقق من رقم المشرف، ويهرّب رموز HTML، ويدمج التنبيهات المتكررة (تنبيه واحد لكل workflow وعقدة كل throttle_minutes)، ويجهّز نص التنبيه وسطر السجل.\nالفائدة: تنبيه مختصر مقروء، وبدون إغراق عند تكرار نفس الخطأ.\nالتفعيل: لا شيء. إذا كان admin_chat_id غير مضبوط يفشل برسالة واضحة."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "19f54928-81af-46d9-8404-a613e5040d3b",
+      "name": "04 - Send Alert to Admin",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        400,
+        -144
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "notesInFlow": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "SET_YOUR_CREDENTIAL"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "ماذا تحتوي: عقدة Telegram (Send Message) بصيغة HTML وبدون ذيل «أُرسلت بواسطة n8n»، مع إعادة المحاولة 3 مرات.\nالفائدة: تصلك رسالة التنبيه على هاتفك. وإن فشل الإرسال يستمر تسجيل الخطأ في الشيت.\nالتفعيل: اختر Telegram credential (توكن البوت)."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "01 - Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "02 - Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 - Config": {
+      "main": [
+        [
+          {
+            "node": "03 - Build Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 - Build Alert": {
+      "main": [
+        [
+          {
+            "node": "04 - Send Alert to Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [],
+  "tags": []
+}
